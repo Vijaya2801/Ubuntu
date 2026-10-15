@@ -1,3 +1,4 @@
+
 name: Deploy Docker Container to EC2
 
 on:
@@ -8,15 +9,14 @@ on:
 
 jobs:
   deploy:
-    # GitHub provides this runner
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Download the repository code
+      # Step 1: Checkout repository
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      # Step 2: Configure SSH access to EC2
+      # Step 2: Configure SSH
       - name: Configure SSH
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
@@ -25,6 +25,7 @@ jobs:
         run: |
           set -eu
 
+          # Validate secrets
           if [ -z "$EC2_HOST" ]; then
             echo "ERROR: EC2_HOST secret is empty"
             exit 1
@@ -40,35 +41,73 @@ jobs:
             exit 1
           fi
 
+          # Create SSH directory and private key
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
           printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
 
-          echo "Checking SSH host: $EC2_HOST"
-          ssh-keyscan -v -T 10 -H "$EC2_HOST" \
-            >> ~/.ssh/known_hosts 2> ~/ssh-keyscan-error.log || {
-              cat ~/ssh-keyscan-error.log
-              echo "ERROR: Cannot retrieve SSH host key."
-              exit 1
-            }
+          # Test SSH port connectivity
+          echo "Testing SSH connectivity..."
+          nc -vz -w 10 "$EC2_HOST" 22
 
+          # Add EC2 host key
+          echo "Retrieving SSH host key..."
+          ssh-keyscan -T 10 -H "$EC2_HOST" \
+            >> ~/.ssh/known_hosts
 
-      # Step 3: Connect to EC2 and deploy the container
-      - name: Pull and Run Docker Container
+          chmod 600 ~/.ssh/known_hosts
+
+      # Step 3: Test SSH login
+      - name: Test EC2 SSH Connection
         env:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USER: ${{ secrets.EC2_USER }}
         run: |
-          ssh -i ~/.ssh/ec2_key \
+          ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/ec2_key \
+            "$EC2_USER@$EC2_HOST" \
+            'echo "SSH connection successful"'
+
+      # Step 4: Install Docker if missing and deploy NGINX
+      - name: Deploy Docker Container
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_USER: ${{ secrets.EC2_USER }}
+        run: |
+          ssh \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o StrictHostKeyChecking=yes \
+            -i ~/.ssh/ec2_key \
             "$EC2_USER@$EC2_HOST" \
             'set -e
-             docker pull nginx:alpine
-             docker rm -f nginx-demo 2>/dev/null || true
-             docker run -d \
+
+             if ! command -v docker >/dev/null 2>&1; then
+               echo "Installing Docker..."
+               sudo dnf install -y docker
+             fi
+
+             sudo systemctl enable --now docker
+
+             echo "Pulling NGINX image..."
+             sudo docker pull nginx:alpine
+
+             echo "Removing old container if present..."
+             sudo docker rm -f nginx-demo 2>/dev/null || true
+
+             echo "Starting NGINX container..."
+             sudo docker run -d \
                --name nginx-demo \
                --restart unless-stopped \
                -p 8081:80 \
                nginx:alpine
-             docker ps'
+
+             echo "Checking running containers..."
+             sudo docker ps
+
+             echo "Deployment completed successfully."'
