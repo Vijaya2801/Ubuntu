@@ -23,13 +23,37 @@ jobs:
           EC2_USER: ${{ secrets.EC2_USER }}
           EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
         run: |
+          set -eu
+
+          if [ -z "$EC2_HOST" ]; then
+            echo "ERROR: EC2_HOST secret is empty"
+            exit 1
+          fi
+
+          if [ -z "$EC2_USER" ]; then
+            echo "ERROR: EC2_USER secret is empty"
+            exit 1
+          fi
+
+          if [ -z "$EC2_SSH_KEY" ]; then
+            echo "ERROR: EC2_SSH_KEY secret is empty"
+            exit 1
+          fi
+
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
           printf '%s\n' "$EC2_SSH_KEY" > ~/.ssh/ec2_key
           chmod 600 ~/.ssh/ec2_key
 
-          ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts
+          echo "Checking SSH host: $EC2_HOST"
+          ssh-keyscan -v -T 10 -H "$EC2_HOST" \
+            >> ~/.ssh/known_hosts 2> ~/ssh-keyscan-error.log || {
+              cat ~/ssh-keyscan-error.log
+              echo "ERROR: Cannot retrieve SSH host key."
+              exit 1
+            }
+
 
       # Step 3: Connect to EC2 and deploy the container
       - name: Pull and Run Docker Container
